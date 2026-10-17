@@ -1,0 +1,13 @@
+# Sign-in relay for linkedin-poster-mcp: holds the LinkedIn app's client secret so users
+# don't need their own developer app. It swaps LinkedIn's one-time code for a token and
+# hands the token straight back to the user's own machine. It stores nothing.
+name = "linkedin-poster-auth"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+preview_urls = false
+
+[vars]
+LINKEDIN_CLIENT_ID = "8643qtigl0qihu"
+SCOPES = "openid profile w_member_social"
+# LINKEDIN_CLIENT_SECRET is set with `wrangler secret put`, never committed.

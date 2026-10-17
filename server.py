@@ -43,6 +43,7 @@ ENV_FILE = Path.home() / ".linkedin-mcp.env"
 STATE_DIR = Path.home() / ".linkedin-mcp"
 TOKEN_FILE = STATE_DIR / "token.json"
 REDIRECT_PORT = 8765
+RELAY = "https://linkedin-poster-auth.mayukh-d.workers.dev"
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/callback"
 SCOPES = "openid profile w_member_social"
 API = "https://api.linkedin.com"
@@ -81,7 +82,8 @@ def load_token() -> dict:
 
 # ---------------------------------------------------------------- OAuth login (CLI)
 
-def login() -> None:
+def login_own_app() -> None:
+    """Sign in with your own LinkedIn developer app (client ID and secret in ~/.linkedin-mcp.env)."""
     env = load_env()
     cid, secret = env.get("LINKEDIN_CLIENT_ID"), env.get("LINKEDIN_CLIENT_SECRET")
     if not cid or not secret:
@@ -135,6 +137,89 @@ def login() -> None:
     })
     exp = dt.datetime.now() + dt.timedelta(seconds=int(t.get("expires_in", 0)))
     print(f"Signed in as {info.get('name')}. Token saved to {TOKEN_FILE} (valid until {exp:%d %b %Y}).")
+
+
+def _save_signin(access_token: str, expires_in: int) -> None:
+    me = httpx.get(f"{API}/v2/userinfo", headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+    me.raise_for_status()
+    info = me.json()
+    save_token({
+        "access_token": access_token,
+        "expires_at": dt.datetime.now().timestamp() + int(expires_in or 0),
+        "person_urn": f"urn:li:person:{info['sub']}",
+        "name": info.get("name", ""),
+    })
+    exp = dt.datetime.now() + dt.timedelta(seconds=int(expires_in or 0))
+    print(f"Signed in as {info.get('name')}. Token saved to {TOKEN_FILE} (valid until {exp:%d %b %Y}).")
+
+
+_DONE_PAGE = b"""<!doctype html><meta charset="utf-8"><title>linkedin-poster-mcp</title>
+<body style="background:#010203;color:#d8e4dc;font:16px ui-monospace,Menlo,monospace;display:grid;place-items:center;min-height:100vh;margin:0">
+<h2 id="m" style="color:#00ff41">Finishing sign-in...</h2>
+<script>
+fetch('/token', {method: 'POST', body: location.hash.slice(1)})
+  .then(r => r.text()).then(t => { document.getElementById('m').textContent = t; history.replaceState(null, '', '/done'); })
+  .catch(() => { document.getElementById('m').textContent = 'Sign-in failed. Check the terminal.'; });
+</script>"""
+
+
+def login_relay() -> None:
+    """Sign in through the hosted relay: no developer app needed. The token comes straight back
+    to this machine in the URL fragment; the relay stores nothing."""
+    nonce = secrets.token_urlsafe(24)
+    result: dict[str, str] = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            body = _DONE_PAGE if self.path.startswith("/done") else b"Not found"
+            self.send_response(200 if self.path.startswith("/done") else 404)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):  # noqa: N802
+            raw = self.rfile.read(int(self.headers.get("Content-Length", 0) or 0)).decode()
+            q = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+            ok = q.get("state") == nonce and "access_token" in q
+            if ok or not result:
+                result.update(q if q.get("state") == nonce else {"error": "state mismatch"})
+            msg = "Signed in. You can close this tab." if ok else "Sign-in failed. Check the terminal."
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(msg.encode())
+
+        def log_message(self, *_):
+            pass
+
+    try:
+        server = http.server.HTTPServer(("127.0.0.1", REDIRECT_PORT), Handler)
+    except OSError:
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    url = f"{RELAY}/start?state={nonce}.{port}"
+    print("Opening LinkedIn sign-in in your browser...\nIf it doesn't open, visit:\n" + url)
+    webbrowser.open(url)
+    server.timeout = 1
+    for _ in range(600):
+        server.handle_request()
+        if result:
+            break
+    server.server_close()
+    if "access_token" not in result:
+        sys.exit(f"Sign-in failed: {result.get('error') or 'timed out'}")
+    _save_signin(result["access_token"], int(result.get("expires_in", 0)))
+
+
+def login(mode: str | None = None) -> None:
+    """--own-app uses your own developer app; --relay (or no credentials file) uses the hosted relay."""
+    env = load_env()
+    own = env.get("LINKEDIN_CLIENT_ID") and env.get("LINKEDIN_CLIENT_SECRET")
+    if mode == "--own-app" or (mode is None and own):
+        login_own_app()
+    else:
+        login_relay()
 
 
 # ---------------------------------------------------------------- API helpers
@@ -316,6 +401,6 @@ def serve() -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "login":
-        login()
+        login(sys.argv[2] if len(sys.argv) > 2 else None)
     else:
         serve()
