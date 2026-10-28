@@ -91,6 +91,10 @@ Under the hood, `create_post` takes:
 - **Images:** `POST /rest/images?action=initializeUpload`, then `PUT` the bytes to the returned upload URL.
 - **Posts:** `POST /rest/posts` with `content.media` (one image) or `content.multiImage` (several), commentary in LinkedIn's "little text" format, and `reshareContext` for reposts.
 
+## Credits
+
+Built by [Mayukh Das](https://mayukhdas.com) with [Claude Code](https://claude.com/claude-code), Anthropic's coding agent, which co-wrote the server, the relay Worker and this README. More on how it came together: [Why I now post to LinkedIn from my terminal](https://mayukhdas.com/notes/post-from-the-terminal/).
+
 ## License
 
 MIT
